@@ -4,3 +4,17 @@ obj/
 *.user
 *.suo
 *.log
+
+# Local secrets and signing material
+.env
+.env.*
+*.pfx
+*.p12
+*.cer
+*.key
+*.keystore
+*.jks
+*.mobileprovision
+*.secrets.json
+secrets.json
+appsettings.Development.json
