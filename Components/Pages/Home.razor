@@ -1,0 +1,378 @@
+@page "/"
+@inject ReaderLibraryService Reader
+@inject PatreonAuthService Patreon
+
+<div class="app-shell">
+    <aside class="source-panel">
+        <div class="brand">
+            <span class="brand-mark">CWR</span>
+            <div>
+                <div class="brand-title">Chaotic Webtoon Reader</div>
+                <div class="brand-subtitle">Windows + Android client</div>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="panel-title">Open Comic</div>
+            <button type="button" class="primary-action" @onclick="OpenPickedArchiveAsync" disabled="@_isBusy">
+                Open zip / cbz
+            </button>
+            <div class="hint">Works on Windows and Android through the system file picker.</div>
+        </section>
+
+        <section class="panel">
+            <label for="source-path" class="panel-title">Path or URL</label>
+            <input id="source-path"
+                   @bind="_sourcePath"
+                   @bind:event="oninput"
+                   placeholder="C:\Comics\Series or https://site/series.zip"
+                   disabled="@_isBusy" />
+            <button type="button" @onclick="OpenPathAsync" disabled="@_isBusy">Open path</button>
+            <div class="hint">Windows folder paths, zip/cbz paths, and direct zip URLs.</div>
+        </section>
+
+        <section class="panel patreon-panel">
+            <div class="panel-title">Patreon</div>
+
+            @if (_patreonState is null)
+            {
+                <div class="hint">Loading Patreon account...</div>
+            }
+            else if (_patreonState.IsConnected)
+            {
+                <div class="account-card">
+                    <strong>@(_patreonState.DisplayName ?? "Patreon member")</strong>
+                    <span>@(_patreonState.Memberships.Count) membership(s)</span>
+                </div>
+
+                @if (_patreonState.Memberships.Count > 0)
+                {
+                    <div class="membership-list">
+                        @foreach (var membership in _patreonState.Memberships)
+                        {
+                            <div class="membership-item">
+                                <strong>@membership.CampaignName</strong>
+                                <span>@(membership.PatronStatus ?? "unknown")</span>
+                                @if (membership.Tiers.Count > 0)
+                                {
+                                    <div class="tier-list">
+                                        @foreach (var tier in membership.Tiers)
+                                        {
+                                            <span>@tier.Title</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="hint">Not connected.</div>
+            }
+
+            <details class="settings-block">
+                <summary>OAuth settings</summary>
+                <label for="patreon-client-id">Client ID</label>
+                <input id="patreon-client-id"
+                       @bind="_patreonClientId"
+                       @bind:event="oninput"
+                       placeholder="Patreon OAuth client ID"
+                       disabled="@_patreonBusy" />
+
+                <label for="patreon-client-secret">Client secret</label>
+                <input id="patreon-client-secret"
+                       type="password"
+                       @bind="_patreonClientSecret"
+                       @bind:event="oninput"
+                       placeholder="@ClientSecretPlaceholder"
+                       disabled="@_patreonBusy" />
+
+                <label for="patreon-redirect-uri">Redirect URI</label>
+                <input id="patreon-redirect-uri"
+                       @bind="_patreonRedirectUri"
+                       @bind:event="oninput"
+                       disabled="@_patreonBusy" />
+
+                <button type="button" @onclick="SavePatreonSettingsAsync" disabled="@_patreonBusy">
+                    Save Patreon settings
+                </button>
+                <div class="hint">Register this redirect URI in your Patreon OAuth client.</div>
+            </details>
+
+            <div class="button-row">
+                <button type="button" @onclick="ConnectPatreonAsync" disabled="@_patreonBusy">Connect</button>
+                <button type="button" @onclick="RefreshPatreonAsync" disabled="@_patreonBusy">Refresh</button>
+                <button type="button" @onclick="DisconnectPatreonAsync" disabled="@_patreonBusy">Disconnect</button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_patreonStatus))
+            {
+                <div class="status @(_patreonError ? "error" : null)">@_patreonStatus</div>
+            }
+        </section>
+
+        @if (_manifest is not null)
+        {
+            <section class="panel page-panel">
+                <div class="panel-title">Pages</div>
+                <div class="page-list">
+                    @foreach (var page in _pages)
+                    {
+                        <a href="@($"#page-{page.Index}")" class="page-link">
+                            <span>@(page.Index + 1)</span>
+                            <span>@(page.Name)</span>
+                        </a>
+                    }
+                </div>
+            </section>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_status))
+        {
+            <div class="status @(_isError ? "error" : null)">@_status</div>
+        }
+    </aside>
+
+    <main class="reader-shell">
+        <header class="reader-header">
+            <div>
+                <h1>@(_manifest?.Title ?? "Open a comic")</h1>
+                <p>@ReaderSummary</p>
+            </div>
+        </header>
+
+        <section class="reader">
+            @if (_manifest is null)
+            {
+                <div class="empty-state">
+                    <strong>No comic loaded.</strong>
+                    <span>Open a zip, cbz, folder path, or direct zip URL to start reading.</span>
+                </div>
+            }
+            else
+            {
+                @foreach (var page in _pages)
+                {
+                    <article id="@($"page-{page.Index}")" class="reader-page">
+                        @if (page.ImageSource is null)
+                        {
+                            <div class="page-loading">Loading @(page.Index + 1)</div>
+                        }
+                        else
+                        {
+                            <img src="@(page.ImageSource)" alt="@(page.Name)" />
+                        }
+                    </article>
+                }
+            }
+        </section>
+    </main>
+</div>
+
+@code {
+    private string _sourcePath = string.Empty;
+    private string _status = string.Empty;
+    private bool _isBusy;
+    private bool _isError;
+    private ComicManifest? _manifest;
+    private List<PageViewModel> _pages = [];
+    private int _loadVersion;
+    private PatreonSettingsState? _patreonSettings;
+    private PatreonAccountState? _patreonState;
+    private string _patreonClientId = string.Empty;
+    private string _patreonClientSecret = string.Empty;
+    private string _patreonRedirectUri = string.Empty;
+    private string _patreonStatus = string.Empty;
+    private bool _patreonBusy;
+    private bool _patreonError;
+
+    private string ReaderSummary
+        => _manifest is null
+            ? "Zip, cbz, folder path, or direct zip URL."
+            : $"{_manifest.PageCount} pages from {_manifest.SourceType}";
+
+    private string ClientSecretPlaceholder
+        => _patreonSettings?.HasClientSecret == true
+            ? "Stored. Leave blank to keep it."
+            : "Patreon OAuth client secret";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPatreonStateAsync();
+    }
+
+    private async Task OpenPickedArchiveAsync()
+    {
+        await RunOpenAsync(async () =>
+        {
+            var manifest = await Reader.PickArchiveAsync();
+            await UseManifestAsync(manifest);
+        });
+    }
+
+    private async Task OpenPathAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_sourcePath))
+        {
+            SetStatus("Enter a folder path, zip/cbz path, or direct zip URL.", true);
+            return;
+        }
+
+        await RunOpenAsync(async () =>
+        {
+            var manifest = await Reader.OpenSourceAsync(_sourcePath);
+            await UseManifestAsync(manifest);
+        });
+    }
+
+    private async Task RunOpenAsync(Func<Task> action)
+    {
+        _isBusy = true;
+        SetStatus("Opening comic...");
+
+        try
+        {
+            await action();
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Open canceled.");
+        }
+        catch (ReaderSourceException ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not open comic: {ex.Message}", true);
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task UseManifestAsync(ComicManifest manifest)
+    {
+        _loadVersion++;
+        var loadVersion = _loadVersion;
+
+        _manifest = manifest;
+        _pages = manifest.Pages
+            .Select(page => new PageViewModel(page.Index, page.Name))
+            .ToList();
+
+        SetStatus($"Found {manifest.PageCount} pages. Loading images...");
+        await InvokeAsync(StateHasChanged);
+
+        foreach (var page in _pages)
+        {
+            if (loadVersion != _loadVersion)
+            {
+                return;
+            }
+
+            page.ImageSource = await Reader.LoadPageDataUrlAsync(page.Index);
+            SetStatus($"Loaded page {page.Index + 1} of {manifest.PageCount}.");
+            await InvokeAsync(StateHasChanged);
+        }
+
+        SetStatus($"Ready: {manifest.PageCount} pages.");
+    }
+
+    private void SetStatus(string message, bool isError = false)
+    {
+        _status = message;
+        _isError = isError;
+    }
+
+    private async Task LoadPatreonStateAsync()
+    {
+        _patreonSettings = await Patreon.GetSettingsAsync();
+        _patreonClientId = _patreonSettings.ClientId;
+        _patreonRedirectUri = _patreonSettings.RedirectUri;
+        _patreonState = await Patreon.GetAccountStateAsync();
+    }
+
+    private async Task SavePatreonSettingsAsync()
+    {
+        await RunPatreonAsync("Saving Patreon settings...", async () =>
+        {
+            await Patreon.SaveSettingsAsync(_patreonClientId, _patreonClientSecret, _patreonRedirectUri);
+            _patreonClientSecret = string.Empty;
+            await LoadPatreonStateAsync();
+            SetPatreonStatus("Patreon settings saved.");
+        });
+    }
+
+    private async Task ConnectPatreonAsync()
+    {
+        await RunPatreonAsync("Opening Patreon login...", async () =>
+        {
+            _patreonState = await Patreon.ConnectAsync();
+            _patreonSettings = await Patreon.GetSettingsAsync();
+            SetPatreonStatus("Patreon connected.");
+        });
+    }
+
+    private async Task RefreshPatreonAsync()
+    {
+        await RunPatreonAsync("Refreshing Patreon account...", async () =>
+        {
+            _patreonState = await Patreon.RefreshAccountAsync();
+            SetPatreonStatus("Patreon account refreshed.");
+        });
+    }
+
+    private async Task DisconnectPatreonAsync()
+    {
+        await RunPatreonAsync("Disconnecting Patreon...", async () =>
+        {
+            await Patreon.DisconnectAsync();
+            await LoadPatreonStateAsync();
+            SetPatreonStatus("Patreon disconnected.");
+        });
+    }
+
+    private async Task RunPatreonAsync(string busyMessage, Func<Task> action)
+    {
+        _patreonBusy = true;
+        SetPatreonStatus(busyMessage);
+
+        try
+        {
+            await action();
+        }
+        catch (OperationCanceledException)
+        {
+            SetPatreonStatus("Patreon login canceled.");
+        }
+        catch (PatreonAuthException ex)
+        {
+            SetPatreonStatus(ex.Message, true);
+        }
+        catch (Exception ex)
+        {
+            SetPatreonStatus($"Patreon failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _patreonBusy = false;
+        }
+    }
+
+    private void SetPatreonStatus(string message, bool isError = false)
+    {
+        _patreonStatus = message;
+        _patreonError = isError;
+    }
+
+    private sealed class PageViewModel(int index, string name)
+    {
+        public int Index { get; } = index;
+        public string Name { get; } = name;
+        public string? ImageSource { get; set; }
+    }
+}
