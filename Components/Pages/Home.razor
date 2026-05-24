@@ -28,10 +28,22 @@
             <input id="source-path"
                    @bind="_sourcePath"
                    @bind:event="oninput"
-                   placeholder="C:\Comics\Series or https://site/series.zip"
+                   placeholder="C:\Comics\Series or Google Drive / zip URL"
                    disabled="@_isBusy" />
             <button type="button" @onclick="OpenPathAsync" disabled="@_isBusy">Open path</button>
-            <div class="hint">Windows folder paths, zip/cbz paths, and direct zip URLs.</div>
+            <div class="hint">Windows folder paths, zip/cbz paths, direct zip URLs, and public Google Drive file links.</div>
+        </section>
+
+        <section class="panel cache-panel">
+            <div class="panel-title">Offline cache</div>
+            <div class="cache-summary">
+                <strong>@_cacheSizeLabel</strong>
+                <span>@_cacheCountLabel</span>
+            </div>
+            <button type="button" @onclick="ClearCacheAsync" disabled="@(_cacheBusy || _isBusy)">
+                Clear cached downloads
+            </button>
+            <div class="hint">Downloaded comics stay available offline until cleared. The open comic is kept.</div>
         </section>
 
         <section class="panel patreon-panel">
@@ -248,6 +260,9 @@
     private ComicManifest? _manifest;
     private List<PageViewModel> _pages = [];
     private int _loadVersion;
+    private string _cacheSizeLabel = "Checking...";
+    private string _cacheCountLabel = "Cache";
+    private bool _cacheBusy;
     private PatreonSettingsState? _patreonSettings;
     private PatreonAccountState? _patreonState;
     private string _patreonClientId = string.Empty;
@@ -304,6 +319,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadCacheStateAsync();
         await LoadPatreonStateAsync();
     }
 
@@ -374,6 +390,7 @@
         finally
         {
             _isBusy = false;
+            await LoadCacheStateAsync();
         }
     }
 
@@ -411,6 +428,55 @@
     {
         _status = message;
         _isError = isError;
+    }
+
+    private async Task LoadCacheStateAsync()
+    {
+        var state = await Reader.GetCacheStateAsync();
+        _cacheSizeLabel = FormatBytes(state.TotalBytes);
+        _cacheCountLabel = state.ArchiveCount == 1
+            ? "1 cached comic"
+            : $"{state.ArchiveCount} cached comics";
+    }
+
+    private async Task ClearCacheAsync()
+    {
+        _cacheBusy = true;
+
+        try
+        {
+            var state = await Reader.ClearCacheAsync();
+            _cacheSizeLabel = FormatBytes(state.TotalBytes);
+            _cacheCountLabel = state.ArchiveCount == 1
+                ? "1 cached comic"
+                : $"{state.ArchiveCount} cached comics";
+            SetStatus("Cached downloads cleared. The open comic was kept.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not clear cache: {ex.Message}", true);
+        }
+        finally
+        {
+            _cacheBusy = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = (double)bytes;
+        var unitIndex = 0;
+
+        while (value >= 1024 && unitIndex < units.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return unitIndex == 0
+            ? $"{bytes} {units[unitIndex]}"
+            : $"{value:0.#} {units[unitIndex]}";
     }
 
     private async Task LoadPatreonStateAsync()

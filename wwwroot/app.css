@@ -211,6 +211,20 @@ p {
     background: #171713;
 }
 
+.cache-summary {
+    border: 1px solid #514b3d;
+    border-radius: 7px;
+    padding: 9px;
+    display: grid;
+    gap: 3px;
+    background: #171713;
+}
+
+.cache-summary span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .page-panel {
     min-height: 180px;
     flex: 1;

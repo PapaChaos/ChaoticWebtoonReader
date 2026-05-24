@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net.Http.Headers;
 using ChaoticWebtoonReader.Models;
 
 namespace ChaoticWebtoonReader.Services;
@@ -32,6 +33,44 @@ public sealed class ReaderLibraryService
     {
         _cacheRoot = Path.Combine(FileSystem.AppDataDirectory, "Cache");
         Directory.CreateDirectory(_cacheRoot);
+    }
+
+    public Task<ReaderCacheState> GetCacheStateAsync()
+    {
+        Directory.CreateDirectory(_cacheRoot);
+
+        var files = Directory.EnumerateFiles(_cacheRoot, "*", SearchOption.AllDirectories)
+            .Select(path => new FileInfo(path))
+            .Where(file => file.Exists)
+            .ToList();
+
+        var archiveCount = files.Count(file => ArchiveExtensions.Contains(file.Extension));
+        var totalBytes = files.Sum(file => file.Length);
+
+        return Task.FromResult(new ReaderCacheState(_cacheRoot, archiveCount, totalBytes));
+    }
+
+    public Task<ReaderCacheState> ClearCacheAsync()
+    {
+        Directory.CreateDirectory(_cacheRoot);
+
+        var activePath = _currentSession?.Kind == SourceKind.Archive
+            ? Path.GetFullPath(_currentSession.StoragePath)
+            : null;
+
+        foreach (var file in Directory.EnumerateFiles(_cacheRoot, "*", SearchOption.AllDirectories))
+        {
+            var fullPath = Path.GetFullPath(file);
+            if (activePath is not null && string.Equals(fullPath, activePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            TryDelete(fullPath);
+        }
+
+        RemoveEmptyDirectories(_cacheRoot);
+        return GetCacheStateAsync();
     }
 
     public async Task<ComicManifest> PickArchiveAsync()
@@ -171,6 +210,16 @@ public sealed class ReaderLibraryService
 
     private async Task<DownloadedArchive> DownloadArchiveAsync(Uri uri)
     {
+        var originalUri = uri;
+        var googleDriveFileId = TryGetGoogleDriveFileId(uri, out var fileId)
+            ? fileId
+            : null;
+
+        if (googleDriveFileId is not null)
+        {
+            uri = CreateGoogleDriveDownloadUri(googleDriveFileId);
+        }
+
         HttpResponseMessage response;
 
         try
@@ -185,13 +234,34 @@ public sealed class ReaderLibraryService
 
         using var _ = response;
 
-        var extension = Path.GetExtension(uri.AbsolutePath);
+        if (IsHtmlResponse(response.Content.Headers.ContentType))
+        {
+            throw new ReaderSourceException("Google Drive did not return a downloadable archive. Make sure the file is shared with anyone who has the link.");
+        }
+
+        var fileName = GetDownloadFileName(response.Content.Headers.ContentDisposition, originalUri);
+        var extension = Path.GetExtension(fileName);
         if (!ArchiveExtensions.Contains(extension))
         {
             extension = ".zip";
+            fileName = $"{Path.GetFileNameWithoutExtension(fileName)}{extension}";
         }
 
-        var storagePath = Path.Combine(_cacheRoot, $"{Guid.NewGuid():N}{extension}");
+        var storageName = googleDriveFileId is null
+            ? $"{Guid.NewGuid():N}_{SanitizeFileName(fileName)}"
+            : $"{googleDriveFileId}_{SanitizeFileName(fileName)}";
+
+        var storagePath = Path.Combine(_cacheRoot, storageName);
+
+        if (File.Exists(storagePath))
+        {
+            var existingFile = new FileInfo(storagePath);
+            var expectedLength = response.Content.Headers.ContentLength;
+            if (expectedLength is null || existingFile.Length == expectedLength.Value)
+            {
+                return new DownloadedArchive(storagePath, originalUri.ToString(), Path.GetFileNameWithoutExtension(fileName));
+            }
+        }
 
         try
         {
@@ -209,12 +279,11 @@ public sealed class ReaderLibraryService
             throw;
         }
 
-        var fileName = Path.GetFileName(uri.LocalPath);
         var title = string.IsNullOrWhiteSpace(fileName)
             ? uri.Host
             : Path.GetFileNameWithoutExtension(fileName);
 
-        return new DownloadedArchive(storagePath, uri.ToString(), title);
+        return new DownloadedArchive(storagePath, originalUri.ToString(), title);
     }
 
     private static IReadOnlyList<ComicPage> FindFolderPages(string root)
@@ -322,6 +391,99 @@ public sealed class ReaderLibraryService
         return Path.GetFullPath(path);
     }
 
+    private static bool TryGetGoogleDriveFileId(Uri uri, out string fileId)
+    {
+        fileId = string.Empty;
+
+        if (!uri.Host.EndsWith("google.com", StringComparison.OrdinalIgnoreCase)
+            && !uri.Host.EndsWith("googleusercontent.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (string.Equals(segments[i], "d", StringComparison.OrdinalIgnoreCase))
+            {
+                fileId = Uri.UnescapeDataString(segments[i + 1]);
+                return !string.IsNullOrWhiteSpace(fileId);
+            }
+        }
+
+        var queryId = GetQueryValue(uri.Query, "id");
+        if (!string.IsNullOrWhiteSpace(queryId))
+        {
+            fileId = queryId;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static Uri CreateGoogleDriveDownloadUri(string fileId)
+    {
+        var escapedId = Uri.EscapeDataString(fileId);
+        return new Uri($"https://drive.usercontent.google.com/download?id={escapedId}&export=download&confirm=t");
+    }
+
+    private static string? GetQueryValue(string query, string key)
+    {
+        var trimmed = query.TrimStart('?');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return null;
+        }
+
+        foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            var pairKey = Uri.UnescapeDataString(parts[0].Replace('+', ' '));
+            if (!string.Equals(pairKey, key, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return parts.Length == 2
+                ? Uri.UnescapeDataString(parts[1].Replace('+', ' '))
+                : string.Empty;
+        }
+
+        return null;
+    }
+
+    private static bool IsHtmlResponse(MediaTypeHeaderValue? contentType)
+    {
+        return contentType?.MediaType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static string GetDownloadFileName(ContentDispositionHeaderValue? contentDisposition, Uri uri)
+    {
+        var headerFileName = contentDisposition?.FileNameStar ?? contentDisposition?.FileName;
+        if (!string.IsNullOrWhiteSpace(headerFileName))
+        {
+            return headerFileName.Trim('"');
+        }
+
+        var localName = Path.GetFileName(uri.LocalPath);
+        return string.IsNullOrWhiteSpace(localName)
+            ? "download.zip"
+            : localName;
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var sanitized = new string(fileName.Select(character =>
+            invalidCharacters.Contains(character) ? '_' : character).ToArray());
+
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "download.zip"
+            : sanitized;
+    }
+
     private static bool IsInsideRoot(string root, string path)
     {
         var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -346,6 +508,25 @@ public sealed class ReaderLibraryService
         }
     }
 
+    private static void RemoveEmptyDirectories(string root)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(path => path.Length))
+        {
+            try
+            {
+                if (!Directory.EnumerateFileSystemEntries(directory).Any())
+                {
+                    Directory.Delete(directory);
+                }
+            }
+            catch
+            {
+                // Cache cleanup should be best effort.
+            }
+        }
+    }
+
     private sealed record DownloadedArchive(string StoragePath, string DisplayPath, string Title);
 
     private sealed record ReaderSession(
@@ -363,3 +544,5 @@ public sealed class ReaderLibraryService
         Archive
     }
 }
+
+public sealed record ReaderCacheState(string Location, int ArchiveCount, long TotalBytes);
