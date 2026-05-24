@@ -1,8 +1,11 @@
 @page "/"
+@using System.Globalization
+@implements IDisposable
 @inject ReaderLibraryService Reader
 @inject PatreonAuthService Patreon
+@inject IJSRuntime JS
 
-<div class="app-shell">
+<div class="@AppShellClass">
     <aside class="source-panel">
         <div class="brand">
             <span class="brand-mark">CWR</span>
@@ -113,6 +116,48 @@
             }
         </section>
 
+        <section class="panel reader-controls-panel">
+            <div class="panel-title">Reader</div>
+            <div class="segmented-control" role="group" aria-label="Reading mode">
+                <button type="button"
+                        class="@ReaderModeButtonClass(ReaderViewMode.Vertical)"
+                        @onclick="() => SetReaderModeAsync(ReaderViewMode.Vertical)">
+                    Vertical
+                </button>
+                <button type="button"
+                        class="@ReaderModeButtonClass(ReaderViewMode.Japanese)"
+                        @onclick="() => SetReaderModeAsync(ReaderViewMode.Japanese)">
+                    Japanese
+                </button>
+                <button type="button"
+                        class="@ReaderModeButtonClass(ReaderViewMode.Western)"
+                        @onclick="() => SetReaderModeAsync(ReaderViewMode.Western)">
+                    Western
+                </button>
+            </div>
+
+            <div class="zoom-controls">
+                <button type="button" @onclick="() => ChangeZoom(-ZoomStep)" disabled="@(_manifest is null)" aria-label="Zoom out">-</button>
+                <input type="range"
+                       min="@MinZoom"
+                       max="@MaxZoom"
+                       step="@ZoomStep"
+                       value="@_zoomPercent"
+                       @oninput="OnZoomInput"
+                       disabled="@(_manifest is null)"
+                       aria-label="Reader zoom" />
+                <button type="button" @onclick="() => ChangeZoom(ZoomStep)" disabled="@(_manifest is null)" aria-label="Zoom in">+</button>
+                <span>@_zoomPercent%</span>
+            </div>
+
+            <div class="button-row two-up">
+                <button type="button" @onclick="ResetZoom" disabled="@(_manifest is null)">Reset zoom</button>
+                <button type="button" @onclick="ToggleFullscreenAsync" disabled="@(_manifest is null)">
+                    @FullscreenButtonText
+                </button>
+            </div>
+        </section>
+
         @if (_manifest is not null)
         {
             <section class="panel page-panel">
@@ -120,7 +165,10 @@
                 <div class="page-list">
                     @foreach (var page in _pages)
                     {
-                        <a href="@($"#page-{page.Index}")" class="page-link">
+                        <a href="@($"#page-{page.Index}")"
+                           class="@PageLinkClass(page.Index)"
+                           @onclick="() => ScrollToPageAsync(page.Index)"
+                           @onclick:preventDefault="true">
                             <span>@(page.Index + 1)</span>
                             <span>@(page.Name)</span>
                         </a>
@@ -141,9 +189,30 @@
                 <h1>@(_manifest?.Title ?? "Open a comic")</h1>
                 <p>@ReaderSummary</p>
             </div>
+            @if (_manifest is not null)
+            {
+                <div class="reader-header-actions">
+                    <button type="button" @onclick="() => NavigatePageAsync(-1)" disabled="@(!CanNavigateBackward)">Prev</button>
+                    <span>@($"{_currentPageIndex + 1} / {_pages.Count}")</span>
+                    <button type="button" @onclick="() => NavigatePageAsync(1)" disabled="@(!CanNavigateForward)">Next</button>
+                </div>
+            }
         </header>
 
-        <section class="reader">
+        @if (_isFullscreen)
+        {
+            <div class="reader-floating-toolbar">
+                <button type="button" @onclick="ToggleFullscreenAsync">Exit</button>
+                <button type="button" @onclick="() => NavigatePageAsync(-1)" disabled="@(!CanNavigateBackward)">Prev</button>
+                <span>@(_pages.Count == 0 ? "0 / 0" : $"{_currentPageIndex + 1} / {_pages.Count}")</span>
+                <button type="button" @onclick="() => NavigatePageAsync(1)" disabled="@(!CanNavigateForward)">Next</button>
+                <button type="button" @onclick="() => ChangeZoom(-ZoomStep)" disabled="@(_manifest is null)" aria-label="Zoom out">-</button>
+                <span>@_zoomPercent%</span>
+                <button type="button" @onclick="() => ChangeZoom(ZoomStep)" disabled="@(_manifest is null)" aria-label="Zoom in">+</button>
+            </div>
+        }
+
+        <section class="@ReaderClass" style="@ReaderStyle">
             @if (_manifest is null)
             {
                 <div class="empty-state">
@@ -187,6 +256,15 @@
     private string _patreonStatus = string.Empty;
     private bool _patreonBusy;
     private bool _patreonError;
+    private ReaderViewMode _readerMode = ReaderViewMode.Vertical;
+    private int _zoomPercent = 100;
+    private int _currentPageIndex;
+    private bool _isFullscreen;
+    private DotNetObjectReference<Home>? _dotNetReference;
+
+    private const int MinZoom = 50;
+    private const int MaxZoom = 250;
+    private const int ZoomStep = 10;
 
     private string ReaderSummary
         => _manifest is null
@@ -198,9 +276,54 @@
             ? "Stored. Leave blank to keep it."
             : "Patreon OAuth client secret";
 
+    private string AppShellClass
+        => _isFullscreen ? "app-shell is-reader-fullscreen" : "app-shell";
+
+    private string ReaderClass
+        => $"reader {ReaderModeClass}";
+
+    private string ReaderModeClass
+        => _readerMode switch
+        {
+            ReaderViewMode.Japanese => "mode-paged-rtl",
+            ReaderViewMode.Western => "mode-paged-ltr",
+            _ => "mode-vertical"
+        };
+
+    private string ReaderStyle
+        => $"--reader-zoom: {(_zoomPercent / 100d).ToString("0.##", CultureInfo.InvariantCulture)};";
+
+    private string FullscreenButtonText
+        => _isFullscreen ? "Exit fullscreen" : "Fullscreen";
+
+    private bool CanNavigateBackward
+        => _pages.Count > 0 && _currentPageIndex > 0;
+
+    private bool CanNavigateForward
+        => _pages.Count > 0 && _currentPageIndex < _pages.Count - 1;
+
     protected override async Task OnInitializedAsync()
     {
         await LoadPatreonStateAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _dotNetReference = DotNetObjectReference.Create(this);
+
+        try
+        {
+            await JS.InvokeVoidAsync("chaoticReader.initialize", _dotNetReference);
+        }
+        catch (JSException)
+        {
+            // The reader still works with the on-screen controls if shortcut wiring fails.
+        }
     }
 
     private async Task OpenPickedArchiveAsync()
@@ -260,6 +383,7 @@
         var loadVersion = _loadVersion;
 
         _manifest = manifest;
+        _currentPageIndex = 0;
         _pages = manifest.Pages
             .Select(page => new PageViewModel(page.Index, page.Name))
             .ToList();
@@ -280,6 +404,7 @@
         }
 
         SetStatus($"Ready: {manifest.PageCount} pages.");
+        await ScrollToPageAsync(0);
     }
 
     private void SetStatus(string message, bool isError = false)
@@ -367,6 +492,175 @@
     {
         _patreonStatus = message;
         _patreonError = isError;
+    }
+
+    private string ReaderModeButtonClass(ReaderViewMode mode)
+        => _readerMode == mode ? "active" : string.Empty;
+
+    private string PageLinkClass(int pageIndex)
+        => _currentPageIndex == pageIndex ? "page-link active" : "page-link";
+
+    private async Task SetReaderModeAsync(ReaderViewMode mode)
+    {
+        _readerMode = mode;
+        await InvokeAsync(StateHasChanged);
+        await ScrollToPageAsync(_currentPageIndex);
+    }
+
+    private async Task ToggleFullscreenAsync()
+    {
+        _isFullscreen = !_isFullscreen;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            if (_isFullscreen)
+            {
+                await JS.InvokeVoidAsync("chaoticReader.requestFullscreen", ".app-shell");
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("chaoticReader.exitFullscreen");
+            }
+        }
+        catch (JSException)
+        {
+            // CSS fullscreen still works if the WebView refuses the browser fullscreen API.
+        }
+
+        await ScrollToPageAsync(_currentPageIndex);
+    }
+
+    private void OnZoomInput(ChangeEventArgs args)
+    {
+        if (int.TryParse(Convert.ToString(args.Value, CultureInfo.InvariantCulture), out var zoom))
+        {
+            SetZoom(zoom);
+        }
+    }
+
+    private void ChangeZoom(int delta)
+    {
+        SetZoom(_zoomPercent + delta);
+    }
+
+    private void ResetZoom()
+    {
+        SetZoom(100);
+    }
+
+    private void SetZoom(int zoom)
+    {
+        _zoomPercent = Math.Clamp(zoom, MinZoom, MaxZoom);
+    }
+
+    [JSInvokable]
+    public async Task ChangeZoomFromShortcutAsync(int delta)
+    {
+        if (delta == 0)
+        {
+            ResetZoom();
+        }
+        else
+        {
+            ChangeZoom(delta);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task NavigateHorizontalFromShortcutAsync(int physicalDirection)
+    {
+        var delta = _readerMode == ReaderViewMode.Japanese
+            ? -physicalDirection
+            : physicalDirection;
+
+        await NavigatePageAsync(delta);
+    }
+
+    [JSInvokable]
+    public async Task ToggleFullscreenFromShortcutAsync()
+    {
+        if (_manifest is null)
+        {
+            return;
+        }
+
+        await ToggleFullscreenAsync();
+    }
+
+    [JSInvokable]
+    public async Task ExitFullscreenFromShortcutAsync()
+    {
+        if (!_isFullscreen)
+        {
+            return;
+        }
+
+        await ToggleFullscreenAsync();
+    }
+
+    [JSInvokable]
+    public async Task SetReaderModeFromShortcutAsync(string mode)
+    {
+        if (_manifest is null)
+        {
+            return;
+        }
+
+        var nextMode = mode switch
+        {
+            "japanese" => ReaderViewMode.Japanese,
+            "western" => ReaderViewMode.Western,
+            _ => ReaderViewMode.Vertical
+        };
+
+        await SetReaderModeAsync(nextMode);
+    }
+
+    private async Task NavigatePageAsync(int delta)
+    {
+        if (_pages.Count == 0)
+        {
+            return;
+        }
+
+        var nextIndex = Math.Clamp(_currentPageIndex + delta, 0, _pages.Count - 1);
+        await ScrollToPageAsync(nextIndex);
+    }
+
+    private async Task ScrollToPageAsync(int pageIndex)
+    {
+        if (_pages.Count == 0)
+        {
+            _currentPageIndex = 0;
+            return;
+        }
+
+        _currentPageIndex = Math.Clamp(pageIndex, 0, _pages.Count - 1);
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await JS.InvokeVoidAsync("chaoticReader.scrollToPage", _currentPageIndex);
+        }
+        catch (JSException)
+        {
+            // The anchor still exists; failing to animate is not fatal.
+        }
+    }
+
+    private enum ReaderViewMode
+    {
+        Vertical,
+        Japanese,
+        Western
+    }
+
+    public void Dispose()
+    {
+        _dotNetReference?.Dispose();
     }
 
     private sealed class PageViewModel(int index, string name)
