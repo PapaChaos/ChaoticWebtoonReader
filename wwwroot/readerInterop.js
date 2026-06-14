@@ -1,4 +1,4 @@
-window.chaoticReader = {
+window.jankReader = {
     initialize(dotNetReference) {
         if (this._initialized) {
             this._dotNetReference = dotNetReference;

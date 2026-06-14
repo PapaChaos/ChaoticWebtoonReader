@@ -9,6 +9,10 @@ namespace ChaoticWebtoonReader;
 [IntentFilter(
     new[] { Intent.ActionView },
     Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
+    DataScheme = "jankwebtoonreader")]
+[IntentFilter(
+    new[] { Intent.ActionView },
+    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
     DataScheme = "chaoticwebtoonreader")]
 public sealed class PatreonAuthCallbackActivity : WebAuthenticatorCallbackActivity
 {

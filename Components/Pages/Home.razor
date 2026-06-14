@@ -8,9 +8,9 @@
 <div class="@AppShellClass">
     <aside class="source-panel">
         <div class="brand">
-            <span class="brand-mark">CWR</span>
+            <span class="brand-mark">JWR</span>
             <div>
-                <div class="brand-title">Chaotic Webtoon Reader</div>
+                <div class="brand-title">Jank Webtoon Reader</div>
                 <div class="brand-subtitle">Windows + Android client</div>
             </div>
         </div>
@@ -334,7 +334,7 @@
 
         try
         {
-            await JS.InvokeVoidAsync("chaoticReader.initialize", _dotNetReference);
+            await JS.InvokeVoidAsync("jankReader.initialize", _dotNetReference);
         }
         catch (JSException)
         {
@@ -582,11 +582,11 @@
         {
             if (_isFullscreen)
             {
-                await JS.InvokeVoidAsync("chaoticReader.requestFullscreen", ".app-shell");
+                await JS.InvokeVoidAsync("jankReader.requestFullscreen", ".app-shell");
             }
             else
             {
-                await JS.InvokeVoidAsync("chaoticReader.exitFullscreen");
+                await JS.InvokeVoidAsync("jankReader.exitFullscreen");
             }
         }
         catch (JSException)
@@ -709,7 +709,7 @@
 
         try
         {
-            await JS.InvokeVoidAsync("chaoticReader.scrollToPage", _currentPageIndex);
+            await JS.InvokeVoidAsync("jankReader.scrollToPage", _currentPageIndex);
         }
         catch (JSException)
         {

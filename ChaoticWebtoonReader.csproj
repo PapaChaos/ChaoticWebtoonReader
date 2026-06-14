@@ -23,7 +23,7 @@
         <MauiXamlInflator>SourceGen</MauiXamlInflator>
 
         <!-- Display name -->
-        <ApplicationTitle>Chaotic Webtoon Reader</ApplicationTitle>
+        <ApplicationTitle>Jank Webtoon Reader</ApplicationTitle>
 
         <!-- App Identifier -->
         <ApplicationId>com.chaoticwebtoonreader.app</ApplicationId>

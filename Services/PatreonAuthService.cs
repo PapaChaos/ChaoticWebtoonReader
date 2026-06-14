@@ -28,7 +28,7 @@ public sealed class PatreonAuthService
 
     public PatreonAuthService()
     {
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("ChaoticWebtoonReader/0.1");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("JankWebtoonReader/0.1");
     }
 
     public async Task<PatreonSettingsState> GetSettingsAsync()
@@ -436,7 +436,7 @@ public sealed class PatreonAuthService
     {
         return DeviceInfo.Current.Platform == DevicePlatform.WinUI
             ? "http://127.0.0.1:52891/patreon-callback"
-            : "chaoticwebtoonreader://patreon-auth";
+            : "jankwebtoonreader://patreon-auth";
     }
 
     private static async Task<string> ReadRequestTargetAsync(TcpClient client, CancellationToken cancellationToken)
@@ -459,7 +459,7 @@ public sealed class PatreonAuthService
 
     private static async Task WriteLoopbackResponseAsync(TcpClient client)
     {
-        const string body = "<!doctype html><html><body><h1>Patreon connected</h1><p>You can close this window and return to Chaotic Webtoon Reader.</p></body></html>";
+        const string body = "<!doctype html><html><body><h1>Patreon connected</h1><p>You can close this window and return to Jank Webtoon Reader.</p></body></html>";
         var bytes = Encoding.UTF8.GetBytes(
             "HTTP/1.1 200 OK\r\n" +
             "Content-Type: text/html; charset=utf-8\r\n" +
